@@ -16,7 +16,7 @@ if not OTX_API_KEY:
 # TIME WINDOW (LAST 24 HOURS)
 # ======================
 end_time = datetime.now(timezone.utc)
-start_time = end_time - timedelta(hours=24)
+start_time = end_time - timedelta(Days=7)
 
 params = {
     "since": start_time.isoformat(),
