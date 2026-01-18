@@ -1,40 +1,100 @@
-import os
 import requests
-from pathlib import Path
+import csv
+import os
+from datetime import datetime, timedelta, timezone
 
-API_KEY = os.environ.get("ABUSEIPDB_API_KEY")
-OUTPUT_FILE = Path("data/ips.txt")
+# ======================
+# CONFIG
+# ======================
+OTX_API_KEY = os.getenv("OTX_API_KEY")
+OTX_URL = "https://otx.alienvault.com/api/v1/indicators/export"
 
-URL = "https://api.abuseipdb.com/api/v2/blacklist"
-PARAMS = {
-    "confidenceMinimum": 75,  # adjust as needed
-    "limit": 10000
+if not OTX_API_KEY:
+    raise RuntimeError("OTX_API_KEY environment variable not set")
+
+CSV_PATH = "iocs/otx_ipv4.csv"
+
+# ======================
+# TIME WINDOW (LAST 24 HOURS)
+# ======================
+end_time = datetime.now(timezone.utc)
+start_time = end_time - timedelta(hours=24)
+
+params = {
+    "since": start_time.isoformat(),
+    "until": end_time.isoformat(),
+    "types": "IPv4",
+    "format": "json"
 }
-HEADERS = {
-    "Key": API_KEY,
-    "Accept": "text/plain"
+
+headers = {
+    "X-OTX-API-KEY": OTX_API_KEY
 }
 
-def fetch_ips():
-    r = requests.get(URL, headers=HEADERS, params=PARAMS, timeout=60)
-    r.raise_for_status()
-    return set(r.text.splitlines())
+# ======================
+# LOAD EXISTING IOCs
+# ======================
+existing_ips = set()
 
-def load_existing_ips():
-    if not OUTPUT_FILE.exists():
-        return set()
-    return set(OUTPUT_FILE.read_text().splitlines())
+if os.path.exists(CSV_PATH):
+    with open(CSV_PATH, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row.get("IndicatorValue"):
+                existing_ips.add(row["IndicatorValue"])
 
-def save_ips(ips):
-    OUTPUT_FILE.parent.mkdir(exist_ok=True)
-    OUTPUT_FILE.write_text("\n".join(sorted(ips)) + "\n")
+# ======================
+# API REQUEST
+# ======================
+response = requests.get(
+    OTX_URL,
+    headers=headers,
+    params=params,
+    timeout=30
+)
+response.raise_for_status()
 
-def main():
-    new_ips = fetch_ips()
-    existing_ips = load_existing_ips()
-    merged = existing_ips | new_ips
-    save_ips(merged)
-    print(f"Existing: {len(existing_ips)} | New fetched: {len(new_ips)} | Total: {len(merged)}")
+data = response.json()
 
-if __name__ == "__main__":
-    main()
+# ======================
+# NORMALIZE RESPONSE
+# ======================
+if isinstance(data, dict) and "results" in data:
+    indicators = data["results"]
+elif isinstance(data, list):
+    indicators = data
+else:
+    raise ValueError("Unexpected OTX response format")
+
+# ======================
+# EXTRACT NEW IPv4s
+# ======================
+new_ips = {
+    item["indicator"]
+    for item in indicators
+    if item.get("type") == "IPv4"
+    and item.get("indicator")
+    and item.get("title") != "Expired"
+}
+
+# ======================
+# MERGE + DEDUP
+# ======================
+merged_ips = sorted(existing_ips | new_ips)
+
+# ======================
+# WRITE CLEAN CSV
+# ======================
+os.makedirs("iocs", exist_ok=True)
+
+with open(CSV_PATH, "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow(["IndicatorValue"])
+    for ip in merged_ips:
+        writer.writerow([ip])
+
+print(
+    f"[+] Existing: {len(existing_ips)} | "
+    f"New: {len(new_ips)} | "
+    f"Total: {len(merged_ips)} → {CSV_PATH}"
+)
