@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,10 +28,27 @@ jobs:
           OTX_API_KEY: ${{ secrets.OTX_API_KEY }}
         run: python otx_ipv4.py
 
-      - name: Commit & push CSV
+      - name: Publish CSV to public feed repo
+        env:
+          FEED_PUSH_TOKEN: ${{ secrets.FEED_PUSH_TOKEN }}
+          FEED_OWNER: Y3liZXJzZWN1cml0eQ
+          FEED_REPO: indicators
         run: |
+          set -e
+
+          # Create a clean publish workspace containing ONLY the CSV
+          rm -rf publish
+          mkdir -p publish/iocs
+          cp iocs/otx_ipv4.csv publish/iocs/otx_ipv4.csv
+
+          cd publish
+          git init
           git config user.name "otx-bot"
           git config user.email "otx-bot@users.noreply.github.com"
+
           git add iocs/otx_ipv4.csv
-          git commit -m "Update OTX IPv4 IOCs" || echo "No changes"
-          git push
+          git commit -m "Update OTX IPv4 IOCs" || echo "No changes to commit"
+
+          git branch -M main
+          git remote add origin "https://${FEED_OWNER}:${FEED_PUSH_TOKEN}@github.com/${FEED_OWNER}/${FEED_REPO}.git"
+          git push --force origin main
